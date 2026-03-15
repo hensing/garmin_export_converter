@@ -1,0 +1,6 @@
+setuptools
+pyyaml
+pytz
+fitdecode
+gpxpy
+lxml

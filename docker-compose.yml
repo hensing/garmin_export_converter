@@ -1,0 +1,10 @@
+services:
+  garmin-converter:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./export:/app/export
+      - ./config.yaml:/app/config.yaml
+    tty: true
+    stdin_open: true
+    restart: no
