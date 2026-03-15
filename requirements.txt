@@ -4,3 +4,4 @@ pytz
 fitdecode
 gpxpy
 lxml
+timezonefinder

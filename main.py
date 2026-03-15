@@ -9,11 +9,13 @@ import tempfile
 import sys
 from datetime import datetime
 from pathlib import Path
+from collections import Counter
 import pytz
 import fitdecode
 import gpxpy
 import gpxpy.gpx
 from lxml import etree
+from timezonefinder import TimezoneFinder
 
 # Configure logging
 logging.basicConfig(
@@ -23,8 +25,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Track if non-GPS warning has been shown
+# Trackers for summary
+stats = {
+    'total_fit': 0,
+    'total_gpx_converted': 0,
+    'total_gpx_source': 0,
+    'timezones': Counter(),
+    'fallback_tz_count': 0
+}
+
 missing_waypoint_warning_shown = False
+tf = TimezoneFinder()
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -75,7 +86,7 @@ def get_fit_start_time(fit_path, target_timezone):
     return None
 
 def extract_id_from_filename(filename):
-    """Extract the numeric ID from filename like 'hdickten_22226321318.fit'."""
+    """Extract the numeric ID from filename."""
     match = re.search(r'_(\d+)', filename)
     if match:
         return match.group(1)
@@ -150,29 +161,36 @@ def get_gpx_start_time(gpx_path, target_timezone):
     return None
 
 def extract_comment(filename):
-    """Extract comment part from filename like 'hdickten_12345_Comment.ext'."""
+    """Extract comment part from filename."""
     match = re.search(r'[^_]+_\d+_(.+)\.[^.]+$', filename)
     if match:
         return match.group(1)
     return ""
 
-def has_gps_data(fit_path):
-    """Quickly check if FIT file contains any GPS coordinates."""
+def get_gps_data_and_timezone(fit_path):
+    """Check for GPS data and return first valid coordinates and timezone name."""
     try:
         with fitdecode.FitReader(str(fit_path)) as fit:
             for frame in fit:
                 if frame.frame_type == fitdecode.FIT_FRAME_DATA and frame.name == 'record':
                     if frame.has_field('position_lat') and frame.has_field('position_long'):
-                        return True
+                        lat = frame.get_value('position_lat')
+                        lon = frame.get_value('position_long')
+                        if lat is not None and lon is not None:
+                            lat = lat * (180.0 / 2**31)
+                            lon = lon * (180.0 / 2**31)
+                            tz_name = tf.timezone_at(lng=lon, lat=lat)
+                            return True, tz_name
     except: pass
-    return False
+    return False, None
 
 def process_single_file(src_file, output_dir, config):
     """Process a single file (fit, gpx, or txt-gpx)."""
     global missing_waypoint_warning_shown
     
     date_format = config.get('date_format', '%Y-%m-%d_%H-%M-%S')
-    target_tz = config.get('timezone', 'Europe/Berlin')
+    default_tz = config.get('default_timezone', 'Europe/Berlin')
+    auto_tz = config.get('auto_timezone', True)
     prefix = config.get('prefix', 'activity')
     convert_to_gpx_flag = config.get('convert_to_gpx', True)
     skip_non_gps = config.get('skip_activities_without_gps', True)
@@ -182,11 +200,17 @@ def process_single_file(src_file, output_dir, config):
     comment = extract_comment(src_path.name)
     start_time = None
     
+    current_tz = default_tz
+    is_fallback_tz = True
+    has_gps = False
+    
     if ext == '.fit':
-        start_time = get_fit_start_time(src_file, target_tz)
+        stats['total_fit'] += 1
+        has_gps, found_tz = get_gps_data_and_timezone(src_file)
+        if auto_tz and found_tz:
+            current_tz = found_tz
+            is_fallback_tz = False
         
-        # Check GPS data if we need to skip or warn
-        has_gps = has_gps_data(src_file)
         if not has_gps:
             if not missing_waypoint_warning_shown:
                 if skip_non_gps:
@@ -197,9 +221,17 @@ def process_single_file(src_file, output_dir, config):
             
             if skip_non_gps:
                 return False
+        
+        if is_fallback_tz:
+            stats['fallback_tz_count'] += 1
+        else:
+            stats['timezones'][current_tz] += 1
+            
+        start_time = get_fit_start_time(src_file, current_tz)
     else:
-        start_time = get_gpx_start_time(src_file, target_tz)
-        has_gps = True # GPX/XML files are assumed to have GPS or we just copy them
+        stats['total_gpx_source'] += 1
+        start_time = get_gpx_start_time(src_file, default_tz)
+        has_gps = True
 
     name_part = None
     if start_time:
@@ -216,18 +248,16 @@ def process_single_file(src_file, output_dir, config):
         if ext == '.fit':
             target_fit = output_dir / f"{new_base_name}.fit"
             shutil.copy2(src_file, target_fit)
-            logger.debug(f"Saved: {target_fit.name}")
             if convert_to_gpx_flag and has_gps:
                 target_gpx = output_dir / f"{new_base_name}.gpx"
                 if convert_fit_to_gpx(src_file, target_gpx):
-                    logger.debug(f"Converted: {target_gpx.name}")
+                    stats['total_gpx_converted'] += 1
         else:
             target_gpx = output_dir / f"{new_base_name}.gpx"
             shutil.copy2(src_file, target_gpx)
-            logger.debug(f"Saved GPX: {target_gpx.name}")
         return True
     else:
-        logger.warning(f"Skipping {src_path.name}: Neither internal timestamp nor numeric ID found in filename.")
+        logger.warning(f"Skipping {src_path.name}: Neither internal timestamp nor numeric ID found.")
         return False
 
 def main():
@@ -248,7 +278,6 @@ def main():
 
     logger.info("Scanning for Garmin export files...")
     
-    # 1. Auto-discovery
     relevant_subfolder = "DI-Connect-Uploaded-Files"
     found_data_dir = None
     for root, dirs, files in os.walk(input_dir):
@@ -259,7 +288,6 @@ def main():
     if not found_data_dir:
         found_data_dir = input_dir
 
-    # 2. Collect ZIPs and loose files
     zip_files = []
     loose_files = []
     for root, dirs, files in os.walk(found_data_dir):
@@ -280,17 +308,14 @@ def main():
     logger.info(f"Scan complete. Found {len(zip_files)} ZIP archives and {len(loose_files)} loose files.")
     logger.info("Starting conversion process...")
 
-    total_processed = 0
+    total_processed_files = 0
 
-    # 3. Process iterative
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
-        # Process ZIPs
         if zip_files:
             for idx, zip_file in enumerate(zip_files):
                 logger.info(f"[{idx+1}/{len(zip_files)}] Processing ZIP: {os.path.basename(zip_file)}")
-                
                 extracted_in_this_zip = []
                 try:
                     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
@@ -315,26 +340,37 @@ def main():
                                 
                         for f_idx, f in enumerate(extracted_in_this_zip):
                             if process_single_file(f, output_dir, config):
-                                total_processed += 1
+                                total_processed_files += 1
                             os.remove(f)
-                            
                             if (f_idx + 1) % 500 == 0:
                                 logger.info(f"  - Current ZIP: Processed {f_idx + 1}/{len(extracted_in_this_zip)} files...")
 
                 except Exception as e:
                     logger.error(f"Failed to process ZIP {zip_file}: {e}")
 
-        # Process loose files
         if loose_files:
             logger.info(f"Processing {len(loose_files)} loose files...")
             for idx, f in enumerate(loose_files):
                 if process_single_file(f, output_dir, config):
-                    total_processed += 1
-                
+                    total_processed_files += 1
                 if (idx + 1) % 500 == 0:
                     logger.info(f"  - Loose files: Processed {idx + 1}/{len(loose_files)} files...")
 
-    logger.info(f"Processing complete. Total files saved/converted: {total_processed}")
+    # Output Statistics
+    print("\n" + "="*50)
+    print("FINISHED PROCESSING SUMMARY")
+    print("="*50)
+    print(f"Total FIT files processed:      {stats['total_fit']}")
+    print(f"Total GPX files (source):       {stats['total_gpx_source']}")
+    print(f"Total GPX files (converted):    {stats['total_gpx_converted']}")
+    print(f"Total output files saved:       {total_processed_files}")
+    print("-" * 50)
+    print("Timezone Statistics:")
+    for tz, count in stats['timezones'].most_common():
+        print(f"  - {tz}: {count} files")
+    print(f"  - {config.get('default_timezone', 'Europe/Berlin')} (Default/Fallback): {stats['fallback_tz_count']} files")
+    print("="*50 + "\n")
+    sys.stdout.flush()
 
 if __name__ == "__main__":
     main()
