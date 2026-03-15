@@ -7,8 +7,9 @@ A professional tool to process Garmin Data Takeout (GDPR) exports. It extracts a
 Garmin's official data export is a mess of nested ZIP files and cryptic names like `garminuser_22226321318.fit`. This tool empowers you to **take control of your data sovereignty**:
 
 - **Order from Chaos:** Automatically auto-discovers and extracts activities from multi-part ZIPs.
-- **Human-Readable:** Converts cryptic IDs into meaningful names like `activity_2022-10-29_12-14-49.gpx`.
+- **Human-Readable:** Converts cryptic IDs into meaningful names like `activity_2025-10-29_12-14-49.gpx`.
 - **Intelligent Timezones:** Uses offline GPS-based lookup to ensure filenames match the local time where you actually trained.
+- **Full DST Support:** Automatically handles Daylight Saving Time (DST) for accurate local timestamps.
 - **Lightroom Ready:** Perfect for long-term backups or post-processing workflows like geotagging photos in Adobe Lightroom.
 
 ## Features
@@ -16,7 +17,7 @@ Garmin's official data export is a mess of nested ZIP files and cryptic names li
 1. **Auto-discovery:** Automatically finds the `DI-Connect-Uploaded-Files` folder within your unzipped export.
 2. **Multi-Format Extraction:** Processes `.fit`, `.gpx`, and XML-based `.txt` files from multiple ZIP parts.
 3. **Smart Renaming:** 
-   - Reading internal FIT metadata (`session.start_time`, `file_id.time_created`) to get exact start times.
+   - Reads internal FIT metadata (`session.start_time`, `file_id.time_created`) to get exact start times.
    - Converts cryptic names like `garminuser_22226321318.fit` into human-readable files like `activity_2025-10-29_12-14-49.gpx`.
    - Preserves activity comments (e.g., "Morning Run") from original filenames.
    - Falls back to numeric IDs if no timestamp is found.
@@ -85,7 +86,34 @@ skip_activities_without_gps: true
 └── DI_CONNECT/
     └── DI-Connect-Uploaded-Files/      <-- Auto-discovered
         ├── UploadedFiles_0-_Part1.zip
+        ├── UploadedFiles_0-_Part2.zip
         └── ...
+```
+
+## Example Output Statistics
+
+At the end of each run, the tool provides a professional summary of your processing:
+
+```text
+==================================================
+FINISHED PROCESSING SUMMARY
+==================================================
+Total FIT files processed:      19587
+Total GPX files (source):       42
+Total GPX files (converted):    4356
+Total output files saved:       19629
+--------------------------------------------------
+Timezone Statistics:
+  - Europe/Berlin: 17750 files
+  - America/New_York: 945 files
+  - Africa/Windhoek: 420 files
+  - Africa/Johannesburg: 112 files
+  - Europe/London: 85 files
+  - Atlantic/Canary: 65 files
+  - Atlantic/Faroe: 25 files
+  - Atlantic/Reykjavik: 15 files
+  - Europe/Berlin (Default/Fallback): 212 files
+==================================================
 ```
 
 ## License

@@ -1,0 +1,18 @@
+# Date and time settings
+date_format: "%Y-%m-%d_%H-%M-%S"
+
+# Automatic timezone detection based on GPS coordinates (offline via timezonefinder)
+auto_timezone: true
+# Fallback timezone if GPS data is missing or auto_timezone is false
+default_timezone: "Europe/Berlin"
+
+# File naming
+prefix: "activity"
+
+# Conversion settings
+convert_to_gpx: true
+
+# Indoor / Gym activity settings
+# If true, activities without GPS waypoints will be completely ignored.
+# If false, the .fit file will be saved, but no .gpx file will be created.
+skip_activities_without_gps: true
